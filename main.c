@@ -65,7 +65,7 @@
 #define MAX_FILTER_LENGTH      2000
 #define DELIMITERS             TEXT(",;|\t:")
 #define APP_NAME               TEXT("csvtab")
-#define APP_VERSION            TEXT("0.9.2")
+#define APP_VERSION            TEXT("0.9.3")
 
 #define CP_UTF16LE             1200
 #define CP_UTF16BE             1201
@@ -780,8 +780,14 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			for (int i = 0; leadZeros == i && i < filesize; i++)
 				leadZeros += rawdata[i] == 0;
 			
-			if (leadZeros == filesize) {	 
+			if (leadZeros == filesize) {
 				PostMessage(GetParent(hWnd), WM_KEYDOWN, 0x33, 0x20001); // Switch to Hex-mode
+				
+				// A special TC-command doesn't work under TC x32. 
+				// https://flint-inc.ru/tcinfo/all_cmd.ru.htm#Misc
+				// PostMessage(GetAncestor(hWnd, GA_ROOT), WM_USER + 51, 4005, 0);
+				keybd_event(VK_TAB, 0x09, KEYEVENTF_EXTENDEDKEY, 0);
+
 				return FALSE;
 			}
 			
@@ -1700,52 +1706,56 @@ int findString(TCHAR* text, TCHAR* word, BOOL isMatchCase, BOOL isWholeWords) {
 }		
 
 void mergeSortJoiner(int indexes[], void* data, int l, int m, int r, BOOL isBackward, BOOL isNums) {
-    int n1 = m - l + 1;
-    int n2 = r - m;
-
-    int L[n1], R[n2];
-
-    for (int i = 0; i < n1; i++)
-        L[i] = indexes[l + i];
-    for (int j = 0; j < n2; j++)
-        R[j] = indexes[m + 1 + j];
-
-    int i = 0, j = 0, k = l;
-    while (i < n1 && j < n2) {
-    	int cmp = isNums ? ((double*)data)[L[i]] <= ((double*)data)[R[j]] : _tcscmp(((TCHAR**)data)[L[i]], ((TCHAR**)data)[R[j]]) <= 0;
-    	if (isBackward)
-    		cmp = !cmp;
-    		
-        if (cmp) {
-            indexes[k] = L[i];
-            i++;
-        } else {
-            indexes[k] = R[j];
-            j++;
-        }
-        k++;
-    }
-
-    while (i < n1) {
-        indexes[k] = L[i];
-        i++;
-        k++;
-    }
-
-    while (j < n2) {
-        indexes[k] = R[j];
-        j++;
-        k++;
-    }
+	int n1 = m - l + 1;
+	int n2 = r - m;
+	
+	int* L = calloc(n1, sizeof(int));
+	int* R = calloc(n2, sizeof(int)); 
+	
+	for (int i = 0; i < n1; i++)
+		L[i] = indexes[l + i];
+	for (int j = 0; j < n2; j++)
+		R[j] = indexes[m + 1 + j];
+	
+	int i = 0, j = 0, k = l;
+	while (i < n1 && j < n2) {
+		int cmp = isNums ? ((double*)data)[L[i]] <= ((double*)data)[R[j]] : _tcscmp(((TCHAR**)data)[L[i]], ((TCHAR**)data)[R[j]]) <= 0;
+		if (isBackward)
+			cmp = !cmp;
+		
+		if (cmp) {
+			indexes[k] = L[i];
+			i++;
+		} else {
+			indexes[k] = R[j];
+			j++;
+		}
+		k++;
+	}
+	
+	while (i < n1) {
+		indexes[k] = L[i];
+		i++;
+		k++;
+	}
+	
+	while (j < n2) {
+		indexes[k] = R[j];
+		j++;
+		k++;
+	}
+	
+	free(L);
+	free(R);
 }
 
 void mergeSort(int indexes[], void* data, int l, int r, BOOL isBackward, BOOL isNums) {
-    if (l < r) {
-        int m = l + (r - l) / 2;
-        mergeSort(indexes, data, l, m, isBackward, isNums);
-        mergeSort(indexes, data, m + 1, r, isBackward, isNums);
-        mergeSortJoiner(indexes, data, l, m, r, isBackward, isNums);
-    }
+	if (l < r) {
+		int m = l + (r - l) / 2;
+		mergeSort(indexes, data, l, m, isBackward, isNums);
+		mergeSort(indexes, data, m + 1, r, isBackward, isNums);
+		mergeSortJoiner(indexes, data, l, m, r, isBackward, isNums);
+	}
 }
 
 int ListView_AddColumn(HWND hListWnd, TCHAR* colName, int fmt) {
