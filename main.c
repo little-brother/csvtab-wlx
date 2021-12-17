@@ -65,7 +65,7 @@
 #define MAX_FILTER_LENGTH      2000
 #define DELIMITERS             TEXT(",;|\t:")
 #define APP_NAME               TEXT("csvtab")
-#define APP_VERSION            TEXT("0.9.3")
+#define APP_VERSION            TEXT("0.9.4")
 
 #define CP_UTF16LE             1200
 #define CP_UTF16BE             1201
@@ -644,11 +644,12 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				NMLVKEYDOWN* kd = (LPNMLVKEYDOWN) lParam;
 				if (kd->wVKey == 0x43) { // C
 					BOOL isCtrl = HIWORD(GetKeyState(VK_CONTROL));
-					BOOL isShift = HIWORD(GetKeyState(VK_SHIFT)); 
+					BOOL isShift = HIWORD(GetKeyState(VK_SHIFT));
+					BOOL isCopyColumn = getStoredValue(TEXT("copy-column"), 0) && ListView_GetSelectedCount(pHdr->hwndFrom) > 1;
 					if (!isCtrl && !isShift)
 						return FALSE;
 						
-					int action = !isShift ? IDM_COPY_CELL : isCtrl ? IDM_COPY_COLUMN : IDM_COPY_ROWS;
+					int action = !isShift && !isCopyColumn ? IDM_COPY_CELL : isCtrl || isCopyColumn ? IDM_COPY_COLUMN : IDM_COPY_ROWS;
 					SendMessage(hWnd, WM_COMMAND, action, 0);
 					return TRUE;
 				}
@@ -786,7 +787,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				// A special TC-command doesn't work under TC x32. 
 				// https://flint-inc.ru/tcinfo/all_cmd.ru.htm#Misc
 				// PostMessage(GetAncestor(hWnd, GA_ROOT), WM_USER + 51, 4005, 0);
-				keybd_event(VK_TAB, 0x09, KEYEVENTF_EXTENDEDKEY, 0);
+				keybd_event(VK_TAB, VK_TAB, KEYEVENTF_EXTENDEDKEY, 0);
 
 				return FALSE;
 			}
@@ -848,11 +849,11 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			int len = _tcslen(data);
 			int cacheSize = len / 100 + 1;
 			TCHAR*** cache = calloc(cacheSize, sizeof(TCHAR**));
+			BOOL isTrim = getStoredValue(TEXT("trim-values"), 1);
 
 			// Two step parsing: 0 - count columns, 1 - fill cache
 			for (int stepNo = 0; stepNo < 2; stepNo++) {					
 				rowNo = -1;
-				BOOL inQuote = FALSE;
 				int start = 0;			
 				for(int pos = 0; pos < len; pos++) {
 					rowNo++;
@@ -870,7 +871,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 					for (; pos < len && colNo < MAX_COLUMN_COUNT; pos++) {
 						TCHAR c = data[pos];
 						
-						while (!inQuote && start == pos && skipComments == 2 && c == TEXT('#')) {
+						while (start == pos && skipComments == 2 && c == TEXT('#')) {
 							while (data[pos] && !isEOL(data[pos]))
 								pos++;
 							while (pos < len && isEOL(data[pos]))
@@ -879,44 +880,73 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 							start = pos;	
 						}
 						
-						if (!inQuote && (c == delimiter || isEOL(c)) || pos >= len - 1) {
-							int vLen = pos - start + (pos >= len - 1);
-							TCHAR* value = calloc(vLen + 1, sizeof(TCHAR));
-		
+						if (c == delimiter || isEOL(c) || pos >= len - 1) {
+							int vLen = pos - start + (pos >= len - 1);		
 							int qPos = -1;
-							for (int i = 0; qPos == -1 && i < vLen; i++) {
+							for (int i = 0; i < vLen; i++) {
 								TCHAR c = data[start + i];
-								if (c == TEXT(' ') || c == TEXT('\t'))
-									continue;
-			
-								qPos = c == TEXT('"') ? i : -1;
+								if (c != TEXT(' ') && c != TEXT('\t')) {
+									qPos = c == TEXT('"') ? i : -1;
+									break;
+								}
 							}
-			
+							
 							if (qPos != -1) {
+								int qCount = 0;								
+								for (int i = qPos; i <= vLen; i++)
+									qCount += data[start + i] == TEXT('"');
+									
+								if (pos < len && qCount % 2)	
+									continue;
+									
 								while(vLen > 0 && data[start + vLen] != TEXT('"'))
 									vLen--;
+									
 								vLen -= qPos + 1;
 							} 
 							
-							if (vLen > 0)
-								_tcsncpy(value, data + start + qPos + 1, vLen);
-							
-							if (stepNo == 1) 
+							if (stepNo == 1) {
+								if (isTrim) {
+									int l = 0, r = 0;
+									if (qPos == -1) {
+										for (int i = 0; i < vLen && (data[start + i] == TEXT(' ') || data[start + i] == TEXT('\t')); i++) 
+											l++;
+									}
+									for (int i = vLen - 1; i > 0 && (data[start + i] == TEXT(' ') || data[start + i] == TEXT('\t')); i--) 
+										r++;
+										
+									start += l; 
+									vLen -= l + r;
+								}
+								
+								TCHAR* value = calloc(vLen + 1, sizeof(TCHAR));
+								if (vLen > 0) {
+									_tcsncpy(value, data + start + qPos + 1, vLen);
+									
+									// replace "" by " in quoted value
+									if (qPos != -1) {
+										int qCount = 0, j = 0;
+										for (int i = 0; i < vLen; i++) {
+											BOOL isQ = value[i] == TEXT('"'); 
+											qCount += isQ;
+											value[j] = value[i];
+											j += isQ && qCount % 2 || !isQ; 
+										}
+										value[j] = 0;
+									}
+								}
+								
 								cache[rowNo][colNo] = value;
+							}
 			 		
 							start = pos + 1;
 							colNo++;
 						}
 						
-						if (!inQuote && isEOL(data[pos])) { 
+						if (isEOL(data[pos])) { 
 							while (isEOL(data[pos + 1]))
 								pos++;
 							break;
-						}
-			
-						if (c == TEXT('"')) { 
-							inQuote = !inQuote;
-							continue;
 						}
 					}
 					
@@ -994,11 +1024,16 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				ListView_DeleteColumn(hGridWnd, colCount - colNo - 1);
 				
 			colCount = *(int*)GetProp(hWnd, TEXT("COLCOUNT"));
-			for (int i = 0; i < colCount; i++) {
-				int fmt = rowCount > 1 && cache[1][i] && _tcslen(cache[1][i]) && isNumber(cache[1][i]) ? LVCFMT_RIGHT : LVCFMT_LEFT;				
+			for (int colNo = 0; colNo < colCount; colNo++) {
+				int cNum = 0;
+				int cCount = rowCount < 6 ? rowCount : 6;
+				for (int rowNo = 1; rowNo < cCount; rowNo++)
+					cNum += cache[rowNo][colNo] && _tcslen(cache[rowNo][colNo]) && isNumber(cache[rowNo][colNo]);
+				
+				int fmt = cNum > cCount / 2 ? LVCFMT_RIGHT : LVCFMT_LEFT;				
 				TCHAR colName[64];
-				_sntprintf(colName, 64, TEXT("Column #%i"), i + 1);
-				ListView_AddColumn(hGridWnd, isHeaderRow && cache[0][i] && _tcslen(cache[0][i]) > 0 ? cache[0][i] : colName, fmt);
+				_sntprintf(colName, 64, TEXT("Column #%i"), colNo + 1);
+				ListView_AddColumn(hGridWnd, isHeaderRow && cache[0][colNo] && _tcslen(cache[0][colNo]) > 0 ? cache[0][colNo] : colName, fmt);
 			}
 	
 			int align = filterAlign == -1 ? ES_LEFT : filterAlign == 1 ? ES_RIGHT : ES_CENTER;
@@ -1157,7 +1192,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			LONG_PTR styles = GetWindowLongPtr(hHeader, GWL_STYLE);
 			styles = isFilterRow ? styles | HDS_FILTERBAR : styles & (~HDS_FILTERBAR);
 			SetWindowLongPtr(hHeader, GWL_STYLE, styles);
-					
+
 			for (int colNo = 0; colNo < colCount; colNo++) 		
 				ShowWindow(GetDlgItem(hHeader, IDC_HEADER_EDIT + colNo), isFilterRow ? SW_SHOW : SW_HIDE);
 
@@ -1426,7 +1461,14 @@ LRESULT CALLBACK cbHotKey(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		(wParam >= 0x31 && wParam <= 0x38) && !getStoredValue(TEXT("disable-num-keys"), 0) || // 1 - 8
 		(wParam == 0x4E || wParam == 0x50) && !getStoredValue(TEXT("disable-np-keys"), 0))) { // N, P
 		HWND hMainWnd = getMainWindow(hWnd);
-		SendMessage(wParam == VK_TAB || wParam == VK_F1 ? hMainWnd : GetParent(hMainWnd), WM_KEYDOWN, wParam, lParam);
+		UINT _msg = wParam >= 0x31 && wParam <= 0x38 ? WM_CHAR : WM_KEYDOWN;
+		if (wParam == VK_TAB || wParam == VK_F1) { 
+			SendMessage(hMainWnd, WM_KEYDOWN, wParam, lParam);
+		} else {
+			SetFocus(GetParent(hMainWnd));		
+			keybd_event(wParam, wParam, KEYEVENTF_EXTENDEDKEY, 0);
+		}
+		
 		return 0;
 	}
 	
