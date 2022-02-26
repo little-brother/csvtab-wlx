@@ -65,7 +65,7 @@
 #define MAX_FILTER_LENGTH      2000
 #define DELIMITERS             TEXT(",;|\t:")
 #define APP_NAME               TEXT("csvtab")
-#define APP_VERSION            TEXT("0.9.4")
+#define APP_VERSION            TEXT("0.9.5")
 
 #define CP_UTF16LE             1200
 #define CP_UTF16BE             1201
@@ -103,6 +103,8 @@ BOOL isEOL(TCHAR c);
 BOOL isNumber(TCHAR* val);
 BOOL isUtf8(const char * string);
 int findString(TCHAR* text, TCHAR* word, BOOL isMatchCase, BOOL isWholeWords);
+BOOL hasString (const TCHAR* str, const TCHAR* sub, BOOL isCaseSensitive);
+TCHAR* extractUrl(TCHAR* data);
 void mergeSort(int indexes[], void* data, int l, int r, BOOL isBackward, BOOL isNums);
 int ListView_AddColumn(HWND hListWnd, TCHAR* colName, int fmt);
 int Header_GetItemText(HWND hWnd, int i, TCHAR* pszText, int cchTextMax);
@@ -514,8 +516,11 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				if (cmd == IDM_COPY_ROWS) {
 					int rowNo = ListView_GetNextItem(hGridWnd, -1, LVNI_SELECTED);
 					while (rowNo != -1) {
-						for (int i = 0; i < colCount; i++)
-							len += _tcslen(cache[resultset[rowNo]][i]) + 1 /* column delimiter: TAB */;
+						for (int colNo = 0; colNo < colCount; colNo++) {
+							if (ListView_GetColumnWidth(hGridWnd, colNo)) 
+								len += _tcslen(cache[resultset[rowNo]][colNo]) + 1; /* column delimiter: TAB */
+						}
+													
 						len++; /* \n */		
 						rowNo = ListView_GetNextItem(hGridWnd, rowNo, LVNI_SELECTED);	
 					}
@@ -537,12 +542,16 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 					int pos = 0;
 					int rowNo = ListView_GetNextItem(hGridWnd, -1, LVNI_SELECTED);
 					while (rowNo != -1) {
-						for (int i = 0; i < colCount; i++) {
-							int len = _tcslen(cache[resultset[rowNo]][i]);
-							_tcsncpy(buf + pos, cache[resultset[rowNo]][i], len);
-							buf[pos + len] = i == colCount - 1 ? TEXT('\n') : TEXT('\t');
-							pos += len + 1;
+						for (int colNo = 0; colNo < colCount; colNo++) {
+							if (ListView_GetColumnWidth(hGridWnd, colNo)) {
+								int len = _tcslen(cache[resultset[rowNo]][colNo]);
+								_tcsncpy(buf + pos, cache[resultset[rowNo]][colNo], len);
+								buf[pos + len] = TEXT('\t');
+								pos += len + 1;
+							}
 						}
+
+						buf[pos - (pos > 0)] = TEXT('\n');
 						rowNo = ListView_GetNextItem(hGridWnd, rowNo, LVNI_SELECTED);	
 					}
 					buf[pos - 1] = 0; // remove last \n
@@ -613,19 +622,41 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 					pItem->pszText = cache[rowNo][pItem->iSubItem];
 				}
 			}
-
+			
 			if (pHdr->idFrom == IDC_GRID && pHdr->code == LVN_COLUMNCLICK) {
 				NMLISTVIEW* lv = (NMLISTVIEW*)lParam;
-				int colNo = lv->iSubItem + 1;
-				int* pOrderBy = (int*)GetProp(hWnd, TEXT("ORDERBY"));
-				int orderBy = *pOrderBy;
-				*pOrderBy = colNo == orderBy || colNo == -orderBy ? -orderBy : colNo;
-				SendMessage(hWnd, WMU_UPDATE_RESULTSET, 0, 0);
+				// Hide or sort the column
+				if (HIWORD(GetKeyState(VK_CONTROL))) {
+					HWND hGridWnd = pHdr->hwndFrom;
+					HWND hHeader = ListView_GetHeader(hGridWnd);
+					int colNo = lv->iSubItem;
+					
+					HWND hEdit = GetDlgItem(hHeader, IDC_HEADER_EDIT + colNo);
+					SetWindowLongPtr(hEdit, GWLP_USERDATA, (LONG_PTR)ListView_GetColumnWidth(hGridWnd, colNo));				
+					ListView_SetColumnWidth(pHdr->hwndFrom, colNo, 0); 
+					InvalidateRect(hHeader, NULL, TRUE);
+				} else {
+					int colNo = lv->iSubItem + 1;
+					int* pOrderBy = (int*)GetProp(hWnd, TEXT("ORDERBY"));
+					int orderBy = *pOrderBy;
+					*pOrderBy = colNo == orderBy || colNo == -orderBy ? -orderBy : colNo;
+					SendMessage(hWnd, WMU_UPDATE_RESULTSET, 0, 0);				
+				}				
 			}
 
 			if (pHdr->idFrom == IDC_GRID && (pHdr->code == (DWORD)NM_CLICK || pHdr->code == (DWORD)NM_RCLICK)) {
 				NMITEMACTIVATE* ia = (LPNMITEMACTIVATE) lParam;
 				SendMessage(hWnd, WMU_SET_CURRENT_CELL, ia->iItem, ia->iSubItem);
+			}
+			
+			if (pHdr->idFrom == IDC_GRID && pHdr->code == (DWORD)NM_CLICK && HIWORD(GetKeyState(VK_MENU))) {	
+				NMITEMACTIVATE* ia = (LPNMITEMACTIVATE) lParam;
+				TCHAR*** cache = (TCHAR***)GetProp(hWnd, TEXT("CACHE"));
+				int* resultset = (int*)GetProp(hWnd, TEXT("RESULTSET"));
+				
+				TCHAR* url = extractUrl(cache[resultset[ia->iItem]][ia->iSubItem]);
+				ShellExecute(0, TEXT("open"), url, 0, 0 , SW_SHOW);
+				free(url);
 			}
 
 			if (pHdr->idFrom == IDC_GRID && pHdr->code == (DWORD)NM_RCLICK) {
@@ -663,6 +694,21 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 					SendMessage(hWnd, WMU_SET_CURRENT_CELL, rowNo, colNo);
 					SendMessage(hGridWnd, WM_SETREDRAW, TRUE, 0);
 					InvalidateRect(hGridWnd, NULL, TRUE);
+				}
+
+				if (kd->wVKey == 0x20 && HIWORD(GetKeyState(VK_CONTROL))) { // Ctrl + Space				
+					HWND hGridWnd = pHdr->hwndFrom;
+					HWND hHeader = ListView_GetHeader(hGridWnd);
+					int colCount = Header_GetItemCount(ListView_GetHeader(pHdr->hwndFrom));
+					for (int colNo = 0; colNo < colCount; colNo++) {
+						if (ListView_GetColumnWidth(hGridWnd, colNo) == 0) {
+							HWND hEdit = GetDlgItem(hHeader, IDC_HEADER_EDIT + colNo);
+							ListView_SetColumnWidth(hGridWnd, colNo, (int)GetWindowLongPtr(hEdit, GWLP_USERDATA));
+						}
+					}
+
+					InvalidateRect(hGridWnd, NULL, TRUE);					
+					return TRUE;
 				}
 				
 				if (kd->wVKey == VK_LEFT || kd->wVKey == VK_RIGHT) {
@@ -1063,6 +1109,8 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			int* pOrderBy = (int*)GetProp(hWnd, TEXT("ORDERBY"));
 			int isHeaderRow = *(int*)GetProp(hWnd, TEXT("HEADERROW"));
 			int* resultset = (int*)GetProp(hWnd, TEXT("RESULTSET"));
+			BOOL isCaseSensitive = getStoredValue(TEXT("filter-case-sensitive"), 0);
+			
 			if (resultset)
 				free(resultset);
 
@@ -1100,12 +1148,13 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 						double dv = _tcstod(value, &end);
 						bResultset[rowNo] = (filter[0] == TEXT('<') && dv < df) || (filter[0] == TEXT('>') && dv > df);
 					} else {
-						bResultset[rowNo] = len == 1 ? _tcsstr(value, filter) != 0 :
-							filter[0] == TEXT('=') ? _tcscmp(value, filter + 1) == 0 :
-							filter[0] == TEXT('!') ? _tcsstr(value, filter + 1) == 0 :
+						bResultset[rowNo] = len == 1 ? hasString(value, filter, isCaseSensitive) :
+							filter[0] == TEXT('=') && isCaseSensitive ? _tcscmp(value, filter + 1) == 0 :
+							filter[0] == TEXT('=') && !isCaseSensitive ? _tcsicmp(value, filter + 1) == 0 :							
+							filter[0] == TEXT('!') ? !hasString(value, filter + 1, isCaseSensitive) :
 							filter[0] == TEXT('<') ? _tcscmp(value, filter + 1) < 0 :
 							filter[0] == TEXT('>') ? _tcscmp(value, filter + 1) > 0 :
-							_tcsstr(value, filter) != 0;
+							hasString(value, filter, isCaseSensitive);
 					}
 				}
 			}
@@ -1626,7 +1675,7 @@ TCHAR detectDelimiter(const TCHAR *data, BOOL skipComments) {
 	for (int delimNo = 0; delimNo < delimCount; delimNo++) {
 		for (int i = 0; i < rowCount; i++) {
 			for (int j = 0; j < rowCount; j++) {
-				total[delimNo] += colCount[i][delimNo] == colCount[j][delimNo] && colCount[i][delimNo] > 0 ? 10 :
+				total[delimNo] += colCount[i][delimNo] == colCount[j][delimNo] && colCount[i][delimNo] > 0 ? 10 + colCount[i][delimNo] :
 					colCount[i][delimNo] != 0 ? 5 :
 					0;	 
 			}				
@@ -1745,7 +1794,43 @@ int findString(TCHAR* text, TCHAR* word, BOOL isMatchCase, BOOL isWholeWords) {
 	}
 
 	return res; 
-}		
+}	
+
+BOOL hasString (const TCHAR* str, const TCHAR* sub, BOOL isCaseSensitive) {
+	BOOL res = FALSE;
+
+	TCHAR* lstr = _tcsdup(str);
+	_tcslwr(lstr);
+	TCHAR* lsub = _tcsdup(sub);
+	_tcslwr(lsub);
+	res = isCaseSensitive ? _tcsstr(str, sub) != 0 : _tcsstr(lstr, lsub) != 0;
+	free(lstr);
+	free(lsub);
+
+	return res;
+};
+
+TCHAR* extractUrl(TCHAR* data) {
+	int len = data ? _tcslen(data) : 0;
+	int start = len;
+	int end = len;
+	
+	TCHAR* url = calloc(len + 10, sizeof(TCHAR));
+	
+	TCHAR* slashes = _tcsstr(data, TEXT("://"));
+	if (slashes) {
+		start = len - _tcslen(slashes);
+		end = start + 3;
+		for (; start > 0 && _istalpha(data[start - 1]); start--);
+		for (; end < len && data[end] != TEXT(' ') && data[end] != TEXT('"') && data[end] != TEXT('\''); end++);
+		_tcsncpy(url, data + start, end - start);
+		
+	} else if (_tcschr(data, TEXT('.'))) {
+		_sntprintf(url, len + 10, TEXT("https://%ls"), data);
+	}
+	
+	return url;
+}	
 
 void mergeSortJoiner(int indexes[], void* data, int l, int m, int r, BOOL isBackward, BOOL isNums) {
 	int n1 = m - l + 1;
