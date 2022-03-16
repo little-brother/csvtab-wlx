@@ -24,6 +24,10 @@
 #define WMU_RESET_CACHE        WM_USER + 8
 #define WMU_SET_FONT           WM_USER + 9
 #define WMU_SET_THEME          WM_USER + 10
+#define WMU_HIDE_COLUMN        WM_USER + 11
+#define WMU_SHOW_COLUMNS       WM_USER + 12
+#define WMU_HOT_KEYS           WM_USER + 13  
+#define WMU_HOT_CHARS          WM_USER + 14
 
 #define IDC_MAIN               100
 #define IDC_GRID               101
@@ -36,6 +40,7 @@
 #define IDM_FILTER_ROW         5003
 #define IDM_HEADER_ROW         5004
 #define IDM_DARK_THEME         5005
+#define IDM_HIDE_COLUMN        5008
 
 #define IDM_ANSI               5010
 #define IDM_UTF8               5011
@@ -65,7 +70,7 @@
 #define MAX_FILTER_LENGTH      2000
 #define DELIMITERS             TEXT(",;|\t:")
 #define APP_NAME               TEXT("csvtab")
-#define APP_VERSION            TEXT("0.9.5")
+#define APP_VERSION            TEXT("0.9.6")
 
 #define CP_UTF16LE             1200
 #define CP_UTF16BE             1201
@@ -86,9 +91,10 @@ static TCHAR iniPath[MAX_PATH] = {0};
 
 void __stdcall ListCloseWindow(HWND hWnd);
 LRESULT CALLBACK cbNewMain (HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+LRESULT CALLBACK cbHotKey(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK cbNewHeader(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 LRESULT CALLBACK cbNewFilterEdit (HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
-LRESULT CALLBACK cbHotKey(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
 HWND getMainWindow(HWND hWnd);
 void setStoredValue(TCHAR* name, int value);
 int getStoredValue(TCHAR* name, int defValue);
@@ -171,7 +177,7 @@ int __stdcall ListSearchTextW(HWND hWnd, TCHAR* searchString, int searchParamete
 		}
 		colNo = pos != -1 ? colNo - 1 : 0;
 		rowNo += pos != -1 ? 0 : isBackward ? -1 : 1; 	
-	} while ((pos == -1) && (isBackward ? rowNo > 0 : rowNo < rowCount - 1));
+	} while ((pos == -1) && (isBackward ? rowNo > 0 : rowNo < rowCount));
 	ListView_SetItemState(hGridWnd, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
 
 	TCHAR buf[256] = {0};
@@ -288,6 +294,8 @@ HWND APIENTRY ListLoadW (HWND hListerWnd, TCHAR* fileToLoad, int showFlags) {
 	AppendMenu(hGridMenu, MF_STRING, IDM_COPY_CELL, TEXT("Copy cell"));
 	AppendMenu(hGridMenu, MF_STRING, IDM_COPY_ROWS, TEXT("Copy row(s)"));
 	AppendMenu(hGridMenu, MF_STRING, IDM_COPY_COLUMN, TEXT("Copy column"));	
+	AppendMenu(hGridMenu, MF_STRING, 0, NULL);
+	AppendMenu(hGridMenu, MF_STRING, IDM_HIDE_COLUMN, TEXT("Hide column"));	
 	AppendMenu(hGridMenu, MF_STRING, 0, NULL);	
 	AppendMenu(hGridMenu, (*(int*)GetProp(hMainWnd, TEXT("FILTERROW")) != 0 ? MF_CHECKED : 0) | MF_STRING, IDM_FILTER_ROW, TEXT("Filters"));		
 	AppendMenu(hGridMenu, (*(int*)GetProp(hMainWnd, TEXT("HEADERROW")) != 0 ? MF_CHECKED : 0) | MF_STRING, IDM_HEADER_ROW, TEXT("Header row"));	
@@ -454,29 +462,8 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 		break;
 		
 		case WM_KEYDOWN: {			
-			if (wParam == VK_TAB) {
-				HWND hFocus = GetFocus();
-				HWND wnds[1000] = {0};
-				EnumChildWindows(hWnd, (WNDENUMPROC)cbEnumTabStopChildren, (LPARAM)wnds);
-
-				int no = 0;
-				while(wnds[no] && wnds[no] != hFocus)
-					no++;
-
-				int cnt = no;
-				while(wnds[cnt])
-					cnt++;
-
-				BOOL isBackward = HIWORD(GetKeyState(VK_CONTROL));
-				no += isBackward ? -1 : 1;
-				SetFocus(wnds[no] && no >= 0 ? wnds[no] : (isBackward ? wnds[cnt - 1] : wnds[0]));
-				return TRUE;
-			}
-			
-			if (wParam == VK_F1) {
-				ShellExecute(0, 0, TEXT("https://github.com/little-brother/csvtab-wlx/wiki"), 0, 0 , SW_SHOW);
-				return TRUE;
-			}			
+			if (SendMessage(hWnd, WMU_HOT_KEYS, wParam, lParam))
+				return 0;			
 		}
 		break;
 				
@@ -508,7 +495,9 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				int* resultset = (int*)GetProp(hWnd, TEXT("RESULTSET"));				
 				if (!resultset)
 					return 0;
-
+					
+				TCHAR* delimiter = getStoredString(TEXT("column-delimiter"), TEXT("\t"));
+				
 				int len = 0;
 				if (cmd == IDM_COPY_CELL) 
 					len = _tcslen(cache[resultset[rowNo]][colNo]);
@@ -518,7 +507,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 					while (rowNo != -1) {
 						for (int colNo = 0; colNo < colCount; colNo++) {
 							if (ListView_GetColumnWidth(hGridWnd, colNo)) 
-								len += _tcslen(cache[resultset[rowNo]][colNo]) + 1; /* column delimiter: TAB */
+								len += _tcslen(cache[resultset[rowNo]][colNo]) + 1; /* column delimiter */
 						}
 													
 						len++; /* \n */		
@@ -546,7 +535,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 							if (ListView_GetColumnWidth(hGridWnd, colNo)) {
 								int len = _tcslen(cache[resultset[rowNo]][colNo]);
 								_tcsncpy(buf + pos, cache[resultset[rowNo]][colNo], len);
-								buf[pos + len] = TEXT('\t');
+								buf[pos + len] = delimiter[0];
 								pos += len + 1;
 							}
 						}
@@ -572,7 +561,13 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 									
 				setClipboardText(buf);
 				free(buf);
+				free(delimiter);
 			}
+			
+			if (cmd == IDM_HIDE_COLUMN) {
+				int colNo = *(int*)GetProp(hWnd, TEXT("CURRENTCOLNO"));
+				SendMessage(hWnd, WMU_HIDE_COLUMN, colNo, 0);
+			}					
 			
 			if (cmd == IDM_FILTER_ROW || cmd == IDM_HEADER_ROW || cmd == IDM_DARK_THEME) {
 				HMENU hMenu = (HMENU)GetProp(hWnd, TEXT("GRIDMENU"));
@@ -625,23 +620,14 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			
 			if (pHdr->idFrom == IDC_GRID && pHdr->code == LVN_COLUMNCLICK) {
 				NMLISTVIEW* lv = (NMLISTVIEW*)lParam;
-				// Hide or sort the column
-				if (HIWORD(GetKeyState(VK_CONTROL))) {
-					HWND hGridWnd = pHdr->hwndFrom;
-					HWND hHeader = ListView_GetHeader(hGridWnd);
-					int colNo = lv->iSubItem;
-					
-					HWND hEdit = GetDlgItem(hHeader, IDC_HEADER_EDIT + colNo);
-					SetWindowLongPtr(hEdit, GWLP_USERDATA, (LONG_PTR)ListView_GetColumnWidth(hGridWnd, colNo));				
-					ListView_SetColumnWidth(pHdr->hwndFrom, colNo, 0); 
-					InvalidateRect(hHeader, NULL, TRUE);
-				} else {
-					int colNo = lv->iSubItem + 1;
-					int* pOrderBy = (int*)GetProp(hWnd, TEXT("ORDERBY"));
-					int orderBy = *pOrderBy;
-					*pOrderBy = colNo == orderBy || colNo == -orderBy ? -orderBy : colNo;
-					SendMessage(hWnd, WMU_UPDATE_RESULTSET, 0, 0);				
-				}				
+				if (HIWORD(GetKeyState(VK_CONTROL))) 
+					return SendMessage(hWnd, WMU_HIDE_COLUMN, lv->iSubItem, 0);
+
+				int colNo = lv->iSubItem + 1;
+				int* pOrderBy = (int*)GetProp(hWnd, TEXT("ORDERBY"));
+				int orderBy = *pOrderBy;
+				*pOrderBy = colNo == orderBy || colNo == -orderBy ? -orderBy : colNo;
+				SendMessage(hWnd, WMU_UPDATE_RESULTSET, 0, 0);				
 			}
 
 			if (pHdr->idFrom == IDC_GRID && (pHdr->code == (DWORD)NM_CLICK || pHdr->code == (DWORD)NM_RCLICK)) {
@@ -697,17 +683,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				}
 
 				if (kd->wVKey == 0x20 && HIWORD(GetKeyState(VK_CONTROL))) { // Ctrl + Space				
-					HWND hGridWnd = pHdr->hwndFrom;
-					HWND hHeader = ListView_GetHeader(hGridWnd);
-					int colCount = Header_GetItemCount(ListView_GetHeader(pHdr->hwndFrom));
-					for (int colNo = 0; colNo < colCount; colNo++) {
-						if (ListView_GetColumnWidth(hGridWnd, colNo) == 0) {
-							HWND hEdit = GetDlgItem(hHeader, IDC_HEADER_EDIT + colNo);
-							ListView_SetColumnWidth(hGridWnd, colNo, (int)GetWindowLongPtr(hEdit, GWLP_USERDATA));
-						}
-					}
-
-					InvalidateRect(hGridWnd, NULL, TRUE);					
+					SendMessage(hWnd, WMU_SHOW_COLUMNS, 0, 0);										
 					return TRUE;
 				}
 				
@@ -806,6 +782,34 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			}
 		}
 		break;
+		
+		// wParam = colNo
+		case WMU_HIDE_COLUMN: {
+			HWND hGridWnd = GetDlgItem(hWnd, IDC_GRID);		
+			HWND hHeader = ListView_GetHeader(hGridWnd);
+			int colNo = (int)wParam;
+
+			HWND hEdit = GetDlgItem(hHeader, IDC_HEADER_EDIT + colNo);
+			SetWindowLongPtr(hEdit, GWLP_USERDATA, (LONG_PTR)ListView_GetColumnWidth(hGridWnd, colNo));				
+			ListView_SetColumnWidth(hGridWnd, colNo, 0); 
+			InvalidateRect(hHeader, NULL, TRUE);
+		}
+		break;
+		
+		case WMU_SHOW_COLUMNS: {
+			HWND hGridWnd = GetDlgItem(hWnd, IDC_GRID);
+			HWND hHeader = ListView_GetHeader(hGridWnd);
+			int colCount = Header_GetItemCount(ListView_GetHeader(hGridWnd));
+			for (int colNo = 0; colNo < colCount; colNo++) {
+				if (ListView_GetColumnWidth(hGridWnd, colNo) == 0) {
+					HWND hEdit = GetDlgItem(hHeader, IDC_HEADER_EDIT + colNo);
+					ListView_SetColumnWidth(hGridWnd, colNo, (int)GetWindowLongPtr(hEdit, GWLP_USERDATA));
+				}
+			}
+
+			InvalidateRect(hGridWnd, NULL, TRUE);		
+		}
+		break;		
 		
 		case WMU_UPDATE_CACHE: {
 			TCHAR* filepath = (TCHAR*)GetProp(hWnd, TEXT("FILEPATH"));
@@ -1416,8 +1420,74 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			ListView_SetTextBkColor(hGridWnd, backColor);			
 			InvalidateRect(hWnd, NULL, TRUE);	
 		}
-		break;	
+		break;
+		
+		case WMU_HOT_KEYS: {
+			BOOL isCtrl = HIWORD(GetKeyState(VK_CONTROL));
+			if (wParam == VK_TAB) {
+				HWND hFocus = GetFocus();
+				HWND wnds[1000] = {0};
+				EnumChildWindows(hWnd, (WNDENUMPROC)cbEnumTabStopChildren, (LPARAM)wnds);
+
+				int no = 0;
+				while(wnds[no] && wnds[no] != hFocus)
+					no++;
+
+				int cnt = no;
+				while(wnds[cnt])
+					cnt++;
+
+				no += isCtrl ? -1 : 1;
+				SetFocus(wnds[no] && no >= 0 ? wnds[no] : (isCtrl ? wnds[cnt - 1] : wnds[0]));
+			}
+			
+			if (wParam == VK_F1) {
+				ShellExecute(0, 0, TEXT("https://github.com/little-brother/csvtab-wlx/wiki"), 0, 0 , SW_SHOW);
+				return TRUE;
+			}
+			
+			if (wParam == 0x20 && isCtrl) { // Ctrl + Space
+				SendMessage(hWnd, WMU_SHOW_COLUMNS, 0, 0);
+				return TRUE;
+			}
+			
+			if (wParam == VK_ESCAPE || wParam == VK_F11 ||
+				wParam == VK_F3 || wParam == VK_F5 || wParam == VK_F7 || (isCtrl && wParam == 0x46) || // Ctrl + F
+				((wParam >= 0x31 && wParam <= 0x38) && !getStoredValue(TEXT("disable-num-keys"), 0) || // 1 - 8
+				(wParam == 0x4E || wParam == 0x50) && !getStoredValue(TEXT("disable-np-keys"), 0)) && // N, P
+				GetDlgCtrlID(GetFocus()) / 100 * 100 != IDC_HEADER_EDIT) { 
+				SetFocus(GetParent(hWnd));		
+				keybd_event(wParam, wParam, KEYEVENTF_EXTENDEDKEY, 0);
+
+				return TRUE;
+			}			
+			
+			return FALSE;					
+		}
+		break;
+		
+		case WMU_HOT_CHARS: {
+			BOOL isCtrl = HIWORD(GetKeyState(VK_CONTROL));
+			return !_istprint(wParam) && (
+				wParam == VK_ESCAPE || wParam == VK_F11 || wParam == VK_F1 ||
+				wParam == VK_F3 || wParam == VK_F5 || wParam == VK_F7) ||
+				wParam == VK_TAB || wParam == VK_RETURN ||
+				isCtrl && (wParam == 0x46 || wParam == 0x20);
+		}
+		break;			
 	}
+	
+	return CallWindowProc((WNDPROC)GetProp(hWnd, TEXT("WNDPROC")), hWnd, msg, wParam, lParam);
+}
+
+LRESULT CALLBACK cbHotKey(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+	if (msg == WM_KEYDOWN && SendMessage(getMainWindow(hWnd), WMU_HOT_KEYS, wParam, lParam))
+		return 0;
+
+	// Prevent beep
+	if (msg == WM_CHAR && SendMessage(getMainWindow(hWnd), WMU_HOT_CHARS, wParam, lParam))
+		return 0;	
+
 	return CallWindowProc((WNDPROC)GetProp(hWnd, TEXT("WNDPROC")), hWnd, msg, wParam, lParam);
 }
 
@@ -1477,19 +1547,22 @@ LRESULT CALLBACK cbNewFilterEdit(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
 		}
 		break;
 
-		case WM_CHAR: {
-			return CallWindowProc(cbHotKey, hWnd, msg, wParam, lParam);
-		}
-		break;
-
 		case WM_KEYDOWN: {
-			if (wParam == VK_RETURN) {			
-				SendMessage(getMainWindow(hWnd), WMU_UPDATE_RESULTSET, 0, 0);				
-				return 0;
+			HWND hMainWnd = getMainWindow(hWnd);
+			if (wParam == VK_RETURN) {
+				SendMessage(hMainWnd, WMU_UPDATE_RESULTSET, 0, 0);
+				return 0;			
 			}
 			
-			if (wParam == VK_TAB || wParam == VK_ESCAPE)
-				return CallWindowProc(cbHotKey, hWnd, msg, wParam, lParam);
+			if (SendMessage(hMainWnd, WMU_HOT_KEYS, wParam, lParam))
+				return 0;
+		}
+		break;
+	
+		// Prevent beep
+		case WM_CHAR: {
+			if (SendMessage(getMainWindow(hWnd), WMU_HOT_CHARS, wParam, lParam))
+				return 0;	
 		}
 		break;
 		
@@ -1500,32 +1573,6 @@ LRESULT CALLBACK cbNewFilterEdit(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPar
 	}
 
 	return CallWindowProc(cbDefault, hWnd, msg, wParam, lParam);
-}
-
-LRESULT CALLBACK cbHotKey(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-	if (msg == WM_KEYDOWN && (
-		wParam == VK_TAB || wParam == VK_ESCAPE || 
-		wParam == VK_F3 || wParam == VK_F5 || wParam == VK_F7 || (HIWORD(GetKeyState(VK_CONTROL)) && wParam == 0x46) || // Ctrl + F
-		wParam == VK_F1 || wParam == VK_F11 ||
-		(wParam >= 0x31 && wParam <= 0x38) && !getStoredValue(TEXT("disable-num-keys"), 0) || // 1 - 8
-		(wParam == 0x4E || wParam == 0x50) && !getStoredValue(TEXT("disable-np-keys"), 0))) { // N, P
-		HWND hMainWnd = getMainWindow(hWnd);
-		UINT _msg = wParam >= 0x31 && wParam <= 0x38 ? WM_CHAR : WM_KEYDOWN;
-		if (wParam == VK_TAB || wParam == VK_F1) { 
-			SendMessage(hMainWnd, WM_KEYDOWN, wParam, lParam);
-		} else {
-			SetFocus(GetParent(hMainWnd));		
-			keybd_event(wParam, wParam, KEYEVENTF_EXTENDEDKEY, 0);
-		}
-		
-		return 0;
-	}
-	
-	// Prevent beep
-	if (msg == WM_CHAR && (wParam == VK_RETURN || wParam == VK_ESCAPE || wParam == VK_TAB))
-		return 0;
-	
-	return CallWindowProc((WNDPROC)GetProp(hWnd, TEXT("WNDPROC")), hWnd, msg, wParam, lParam);
 }
 
 HWND getMainWindow(HWND hWnd) {
