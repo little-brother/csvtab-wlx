@@ -70,7 +70,7 @@
 #define MAX_FILTER_LENGTH      2000
 #define DELIMITERS             TEXT(",;|\t:")
 #define APP_NAME               TEXT("csvtab")
-#define APP_VERSION            TEXT("0.9.6")
+#define APP_VERSION            TEXT("0.9.7")
 
 #define CP_UTF16LE             1200
 #define CP_UTF16BE             1201
@@ -1253,9 +1253,12 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				SendMessage(hWnd, WMU_UPDATE_FILTER_SIZE, 0, 0);											
 
 			// Bug fix: force Windows to redraw header
-			int w = ListView_GetColumnWidth(hGridWnd, 0);
-			ListView_SetColumnWidth(hGridWnd, 0, w + 1);
-			ListView_SetColumnWidth(hGridWnd, 0, w);			
+			if (IsWindowVisible(hGridWnd)) { // Win10x64, TCx32 
+				int w = ListView_GetColumnWidth(hGridWnd, 0);
+				ListView_SetColumnWidth(hGridWnd, 0, w + 1);
+				ListView_SetColumnWidth(hGridWnd, 0, w);			
+			}
+						
 			SendMessage(hWnd, WM_SETREDRAW, TRUE, 0);
 			InvalidateRect(hWnd, NULL, TRUE);
 		}
