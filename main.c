@@ -70,7 +70,7 @@
 #define MAX_FILTER_LENGTH      2000
 #define DELIMITERS             TEXT(",;|\t:")
 #define APP_NAME               TEXT("csvtab")
-#define APP_VERSION            TEXT("0.9.8")
+#define APP_VERSION            TEXT("0.9.9")
 
 #define CP_UTF16LE             1200
 #define CP_UTF16BE             1201
@@ -129,7 +129,11 @@ BOOL APIENTRY DllMain (HANDLE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 }
 
 void __stdcall ListGetDetectString(char* DetectString, int maxlen) {
-	snprintf(DetectString, maxlen, "MULTIMEDIA & ext=\"CSV\"");
+	TCHAR* detectString16 = getStoredString(TEXT("detect-string"), TEXT("MULTIMEDIA & (ext=\"CSV\" | ext=\"TAB\" | ext=\"TSV\")"));
+	char* detectString8 = utf16to8(detectString16);
+	snprintf(DetectString, maxlen, detectString8);
+	free(detectString16);
+	free(detectString8);
 }
 
 void __stdcall ListSetDefaultParams(ListDefaultParamStruct* dps) {
@@ -1001,6 +1005,9 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 							break;
 						}
 					}
+					
+					while (pos < len && !isEOL(data[pos - 1]))
+						pos++;
 					
 					while (stepNo == 1 && colNo < colCount) {
 						cache[rowNo][colNo] = calloc(1, sizeof(TCHAR));
