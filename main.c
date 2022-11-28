@@ -70,7 +70,7 @@
 #define MAX_FILTER_LENGTH      2000
 #define DELIMITERS             TEXT(",;|\t:")
 #define APP_NAME               TEXT("csvtab")
-#define APP_VERSION            TEXT("0.9.9")
+#define APP_VERSION            TEXT("1.0.0")
 
 #define CP_UTF16LE             1200
 #define CP_UTF16BE             1201
@@ -1006,8 +1006,13 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 						}
 					}
 					
-					while (pos < len && !isEOL(data[pos - 1]))
-						pos++;
+					// Truncate 127+ columns
+					if (!isEOL(data[pos])) {
+						while (pos < len && !isEOL(data[pos + 1]))
+							pos++;
+						while (pos < len && isEOL(data[pos + 1]))
+							pos++;	
+					}
 					
 					while (stepNo == 1 && colNo < colCount) {
 						cache[rowNo][colNo] = calloc(1, sizeof(TCHAR));
@@ -1258,15 +1263,13 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			for (int colNo = 0; colNo < colCount; colNo++) 		
 				ShowWindow(GetDlgItem(hHeader, IDC_HEADER_EDIT + colNo), isFilterRow ? SW_SHOW : SW_HIDE);
 
-			if (isFilterRow)				
-				SendMessage(hWnd, WMU_UPDATE_FILTER_SIZE, 0, 0);											
-
 			// Bug fix: force Windows to redraw header
-			if (IsWindowVisible(hGridWnd)) { // Win10x64, TCx32 
-				int w = ListView_GetColumnWidth(hGridWnd, 0);
-				ListView_SetColumnWidth(hGridWnd, 0, w + 1);
-				ListView_SetColumnWidth(hGridWnd, 0, w);			
-			}
+			int w = ListView_GetColumnWidth(hGridWnd, 0);
+			ListView_SetColumnWidth(hGridWnd, 0, w + 1);
+			ListView_SetColumnWidth(hGridWnd, 0, w);			
+
+			if (isFilterRow)				
+				SendMessage(hWnd, WMU_UPDATE_FILTER_SIZE, 0, 0);
 						
 			SendMessage(hWnd, WM_SETREDRAW, TRUE, 0);
 			InvalidateRect(hWnd, NULL, TRUE);
