@@ -70,7 +70,7 @@
 #define MAX_FILTER_LENGTH      2000
 #define DELIMITERS             TEXT(",;|\t:")
 #define APP_NAME               TEXT("csvtab")
-#define APP_VERSION            TEXT("1.0.0")
+#define APP_VERSION            TEXT("1.0.1")
 
 #define CP_UTF16LE             1200
 #define CP_UTF16BE             1201
@@ -263,7 +263,9 @@ HWND APIENTRY ListLoadW (HWND hListerWnd, TCHAR* fileToLoad, int showFlags) {
 	SetProp(hMainWnd, TEXT("BACKCOLOR2"), calloc(1, sizeof(int)));	
 	SetProp(hMainWnd, TEXT("FILTERTEXTCOLOR"), calloc(1, sizeof(int)));
 	SetProp(hMainWnd, TEXT("FILTERBACKCOLOR"), calloc(1, sizeof(int)));		
-	SetProp(hMainWnd, TEXT("CURRENTCELLCOLOR"), calloc(1, sizeof(int)));	
+	SetProp(hMainWnd, TEXT("CURRENTCELLCOLOR"), calloc(1, sizeof(int)));
+	SetProp(hMainWnd, TEXT("SELECTIONTEXTCOLOR"), calloc(1, sizeof(int)));	
+	SetProp(hMainWnd, TEXT("SELECTIONBACKCOLOR"), calloc(1, sizeof(int)));		
 	
 	*(int*)GetProp(hMainWnd, TEXT("FILESIZE")) = st.st_size;
 	*(int*)GetProp(hMainWnd, TEXT("CODEPAGE")) = -1;
@@ -278,7 +280,7 @@ HWND APIENTRY ListLoadW (HWND hListerWnd, TCHAR* fileToLoad, int showFlags) {
 	HDC hDC = GetDC(hMainWnd);
 	float z = GetDeviceCaps(hDC, LOGPIXELSX) / 96.0; // 96 = 100%, 120 = 125%, 144 = 150%
 	ReleaseDC(hMainWnd, hDC);	
-	int sizes[7] = {35 * z, 95 * z, 125 * z, 155 * z, 275 * z, 355 * z, -1};
+	int sizes[7] = {35 * z, 95 * z, 125 * z, 235 * z, 355 * z, 435 * z, -1};
 	SendMessage(hStatusWnd, SB_SETPARTS, 7, (LPARAM)&sizes);
 	TCHAR buf[32];
 	_sntprintf(buf, 32, TEXT(" %ls"), APP_VERSION);
@@ -289,7 +291,7 @@ HWND APIENTRY ListLoadW (HWND hListerWnd, TCHAR* fileToLoad, int showFlags) {
 		205, 0, 100, 100, hMainWnd, (HMENU)IDC_GRID, GetModuleHandle(0), NULL);
 		
 	int noLines = getStoredValue(TEXT("disable-grid-lines"), 0);	
-	ListView_SetExtendedListViewStyle(hGridWnd, LVS_EX_FULLROWSELECT | (noLines ? 0 : LVS_EX_GRIDLINES) | LVS_EX_LABELTIP);
+	ListView_SetExtendedListViewStyle(hGridWnd, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | (noLines ? 0 : LVS_EX_GRIDLINES) | LVS_EX_LABELTIP);
 	SetProp(hGridWnd, TEXT("WNDPROC"), (HANDLE)SetWindowLongPtr(hGridWnd, GWLP_WNDPROC, (LONG_PTR)cbHotKey));
 
 	HWND hHeader = ListView_GetHeader(hGridWnd);
@@ -324,9 +326,9 @@ HWND APIENTRY ListLoadW (HWND hListerWnd, TCHAR* fileToLoad, int showFlags) {
 	SetProp(hMainWnd, TEXT("DELIMITERMENU"), hDelimiterMenu);
 	
 	HMENU hCommentMenu = CreatePopupMenu();
-	AppendMenu(hCommentMenu, MF_STRING, IDM_DEFAULT, TEXT("#0 - No special"));
+	AppendMenu(hCommentMenu, MF_STRING, IDM_DEFAULT, TEXT("#0 - Parse as usual"));
 	AppendMenu(hCommentMenu, MF_STRING, IDM_NO_PARSE, TEXT("#1 - Don't parse"));
-	AppendMenu(hCommentMenu, MF_STRING, IDM_NO_SHOW, TEXT("#2 - Don't show"));
+	AppendMenu(hCommentMenu, MF_STRING, IDM_NO_SHOW, TEXT("#2 - Ignore (hide)"));
 	SetProp(hMainWnd, TEXT("COMMENTMENU"), hCommentMenu);	
 
 	SendMessage(hMainWnd, WMU_SET_FONT, 0, 0);
@@ -378,8 +380,10 @@ void __stdcall ListCloseWindow(HWND hWnd) {
 	free((int*)GetProp(hWnd, TEXT("BACKCOLOR2")));	
 	free((int*)GetProp(hWnd, TEXT("FILTERTEXTCOLOR")));
 	free((int*)GetProp(hWnd, TEXT("FILTERBACKCOLOR")));
-	free((int*)GetProp(hWnd, TEXT("CURRENTCELLCOLOR")));	
-		
+	free((int*)GetProp(hWnd, TEXT("CURRENTCELLCOLOR")));
+	free((int*)GetProp(hWnd, TEXT("SELECTIONTEXTCOLOR")));	
+	free((int*)GetProp(hWnd, TEXT("SELECTIONBACKCOLOR")));		
+
 	DeleteFont(GetProp(hWnd, TEXT("FONT")));
 	DeleteObject(GetProp(hWnd, TEXT("BACKBRUSH")));	
 	DeleteObject(GetProp(hWnd, TEXT("FILTERBACKBRUSH")));
@@ -412,8 +416,10 @@ void __stdcall ListCloseWindow(HWND hWnd) {
 	RemoveProp(hWnd, TEXT("BACKCOLOR"));
 	RemoveProp(hWnd, TEXT("BACKCOLOR2"));	
 	RemoveProp(hWnd, TEXT("FILTERTEXTCOLOR"));
-	RemoveProp(hWnd, TEXT("FILTERBACKCOLOR"));	
-	RemoveProp(hWnd, TEXT("CURRENTCELLCOLOR"));	
+	RemoveProp(hWnd, TEXT("FILTERBACKCOLOR"));
+	RemoveProp(hWnd, TEXT("CURRENTCELLCOLOR"));
+	RemoveProp(hWnd, TEXT("SELECTIONTEXTCOLOR"));
+	RemoveProp(hWnd, TEXT("SELECTIONBACKCOLOR"));
 	RemoveProp(hWnd, TEXT("BACKBRUSH"));
 	RemoveProp(hWnd, TEXT("FILTERBACKBRUSH"));	
 	RemoveProp(hWnd, TEXT("FONT"));
@@ -749,39 +755,26 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			
 			if (pHdr->idFrom == IDC_GRID && pHdr->code == (UINT)NM_CUSTOMDRAW) {
 				int result = CDRF_DODEFAULT;
-	
-				NMLVCUSTOMDRAW* pCustomDraw = (LPNMLVCUSTOMDRAW)lParam;
-				if (pCustomDraw->nmcd.dwDrawStage == CDDS_PREPAINT)
+				
+				NMLVCUSTOMDRAW* pCustomDraw = (LPNMLVCUSTOMDRAW)lParam;				
+				if (pCustomDraw->nmcd.dwDrawStage == CDDS_PREPAINT) 
 					result = CDRF_NOTIFYITEMDRAW;
 	
-				if (pCustomDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT)
-					result = CDRF_NOTIFYSUBITEMDRAW | CDRF_NEWFONT;
-	
-				if (pCustomDraw->nmcd.dwDrawStage == (CDDS_ITEMPREPAINT | CDDS_SUBITEM)) {
-					pCustomDraw->clrTextBk = pCustomDraw->nmcd.dwItemSpec % 2 == 0 ? *(int*)GetProp(hWnd, TEXT("BACKCOLOR")) : *(int*)GetProp(hWnd, TEXT("BACKCOLOR2"));
-					result = CDRF_NOTIFYPOSTPAINT;
+				if (pCustomDraw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
+					if (ListView_GetItemState(pHdr->hwndFrom, pCustomDraw->nmcd.dwItemSpec, LVIS_SELECTED)) {
+						pCustomDraw->nmcd.uItemState &= ~CDIS_SELECTED;
+						result = CDRF_NOTIFYSUBITEMDRAW;
+					} else {
+						pCustomDraw->clrTextBk = *(int*)GetProp(hWnd, pCustomDraw->nmcd.dwItemSpec % 2 == 0 ? TEXT("BACKCOLOR") : TEXT("BACKCOLOR2"));
+					}				
 				}
-	
-				if ((pCustomDraw->nmcd.dwDrawStage == CDDS_POSTPAINT) | CDDS_SUBITEM) {
+				
+				if (pCustomDraw->nmcd.dwDrawStage == (CDDS_ITEMPREPAINT | CDDS_SUBITEM)) {
 					int rowNo = *(int*)GetProp(hWnd, TEXT("CURRENTROWNO"));
 					int colNo = *(int*)GetProp(hWnd, TEXT("CURRENTCOLNO"));
-					if ((pCustomDraw->nmcd.dwItemSpec == (DWORD)rowNo) && (pCustomDraw->iSubItem == colNo)) {
-						HPEN hPen = CreatePen(PS_DOT, 1, *(int*)GetProp(hWnd, TEXT("CURRENTCELLCOLOR")));
-						HDC hDC = pCustomDraw->nmcd.hdc;
-						SelectObject(hDC, hPen);
-	
-						RECT rc = {0};
-						ListView_GetSubItemRect(pHdr->hwndFrom, rowNo, colNo, LVIR_BOUNDS, &rc);
-						if (colNo == 0) 
-							rc.right = ListView_GetColumnWidth(pHdr->hwndFrom, 0);
-
-						MoveToEx(hDC, rc.left - 2, rc.top + 1, 0);
-						LineTo(hDC, rc.right - 1, rc.top + 1);
-						LineTo(hDC, rc.right - 1, rc.bottom - 2);
-						LineTo(hDC, rc.left + 1, rc.bottom - 2);
-						LineTo(hDC, rc.left + 1, rc.top);
-						DeleteObject(hPen);
-					}
+					BOOL isCurrCell = (pCustomDraw->nmcd.dwItemSpec == (DWORD)rowNo) && (pCustomDraw->iSubItem == colNo);
+					pCustomDraw->clrText = *(int*)GetProp(hWnd, TEXT("SELECTIONTEXTCOLOR"));
+					pCustomDraw->clrTextBk = *(int*)GetProp(hWnd, isCurrCell ? TEXT("CURRENTCELLCOLOR") : TEXT("SELECTIONBACKCOLOR"));
 				}
 	
 				return result;
@@ -927,7 +920,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 					for (; pos < len && colNo < MAX_COLUMN_COUNT; pos++) {
 						TCHAR c = data[pos];
 						
-						while (start == pos && skipComments == 2 && c == TEXT('#')) {
+						while (start == pos && (stepNo == 0 && skipComments == 1 || skipComments == 2) && c == TEXT('#')) {
 							while (data[pos] && !isEOL(data[pos]))
 								pos++;
 							while (pos < len && isEOL(data[pos]))
@@ -936,7 +929,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 							start = pos;	
 						}
 						
-						if (c == delimiter || isEOL(c) || pos >= len - 1) {
+						if (c == delimiter && !(skipComments && data[start] == TEXT('#')) || isEOL(c) || pos >= len - 1) {
 							int vLen = pos - start + (pos >= len - 1);		
 							int qPos = -1;
 							for (int i = 0; i < vLen; i++) {
@@ -1055,7 +1048,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				_sntprintf(buf, 32, TEXT(" TAB"));
 			SendMessage(hStatusWnd, SB_SETTEXT, SB_DELIMITER, (LPARAM)buf);
 			
-			_sntprintf(buf, 32, TEXT(" %ls"), skipComments == 0 ? TEXT("#0   ") : skipComments == 1 ? TEXT("#1   ") : TEXT("#2   "));
+			_sntprintf(buf, 32, TEXT(" Comment mode: #%i     "), skipComments); // Long tail for a tip
 			SendMessage(hStatusWnd, SB_SETTEXT, SB_COMMENTS, (LPARAM)buf);
 									
 			SetProp(hWnd, TEXT("CACHE"), cache);
@@ -1264,9 +1257,8 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				ShowWindow(GetDlgItem(hHeader, IDC_HEADER_EDIT + colNo), isFilterRow ? SW_SHOW : SW_HIDE);
 
 			// Bug fix: force Windows to redraw header
-			int w = ListView_GetColumnWidth(hGridWnd, 0);
-			ListView_SetColumnWidth(hGridWnd, 0, w + 1);
-			ListView_SetColumnWidth(hGridWnd, 0, w);			
+			SetWindowPos(hGridWnd, 0, 0, 0, 0, 0, SWP_NOZORDER | SWP_NOMOVE);
+			SendMessage(getMainWindow(hWnd), WM_SIZE, 0, 0);			
 
 			if (isFilterRow)				
 				SendMessage(hWnd, WMU_UPDATE_FILTER_SIZE, 0, 0);
@@ -1418,15 +1410,19 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			int backColor2 = !isDark ? getStoredValue(TEXT("back-color2"), RGB(240, 240, 240)) : getStoredValue(TEXT("back-color2-dark"), RGB(52, 52, 52));
 			int filterTextColor = !isDark ? getStoredValue(TEXT("filter-text-color"), RGB(0, 0, 0)) : getStoredValue(TEXT("filter-text-color-dark"), RGB(255, 255, 255));
 			int filterBackColor = !isDark ? getStoredValue(TEXT("filter-back-color"), RGB(240, 240, 240)) : getStoredValue(TEXT("filter-back-color-dark"), RGB(60, 60, 60));
-			int currCellColor = !isDark ? getStoredValue(TEXT("current-cell-color"), RGB(20, 250, 250)) : getStoredValue(TEXT("current-cell-color-dark"), RGB(20, 250, 250));
-			
+			int currCellColor = !isDark ? getStoredValue(TEXT("current-cell-back-color"), RGB(70, 96, 166)) : getStoredValue(TEXT("current-cell-back-color-dark"), RGB(32, 62, 62));
+			int selectionTextColor = !isDark ? getStoredValue(TEXT("selection-text-color"), RGB(255, 255, 255)) : getStoredValue(TEXT("selection-text-color-dark"), RGB(220, 220, 220));
+			int selectionBackColor = !isDark ? getStoredValue(TEXT("selection-back-color"), RGB(10, 36, 106)) : getStoredValue(TEXT("selection-back-color-dark"), RGB(72, 102, 102));			
+						
 			*(int*)GetProp(hWnd, TEXT("TEXTCOLOR")) = textColor;
 			*(int*)GetProp(hWnd, TEXT("BACKCOLOR")) = backColor;
 			*(int*)GetProp(hWnd, TEXT("BACKCOLOR2")) = backColor2;			
 			*(int*)GetProp(hWnd, TEXT("FILTERTEXTCOLOR")) = filterTextColor;
 			*(int*)GetProp(hWnd, TEXT("FILTERBACKCOLOR")) = filterBackColor;
-			*(int*)GetProp(hWnd, TEXT("CURRENTCELLCOLOR")) = currCellColor;			
-			
+			*(int*)GetProp(hWnd, TEXT("CURRENTCELLCOLOR")) = currCellColor;
+			*(int*)GetProp(hWnd, TEXT("SELECTIONTEXTCOLOR")) = selectionTextColor;
+			*(int*)GetProp(hWnd, TEXT("SELECTIONBACKCOLOR")) = selectionBackColor;
+
 			DeleteObject(GetProp(hWnd, TEXT("FILTERBACKBRUSH")));			
 			SetProp(hWnd, TEXT("FILTERBACKBRUSH"), CreateSolidBrush(filterBackColor));
 
