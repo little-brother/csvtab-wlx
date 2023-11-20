@@ -71,7 +71,7 @@
 #define MAX_FILTER_LENGTH      2000
 #define DELIMITERS             TEXT(",;|\t:")
 #define APP_NAME               TEXT("csvtab")
-#define APP_VERSION            TEXT("1.0.4")
+#define APP_VERSION            TEXT("1.0.5")
 
 #define CP_UTF16LE             1200
 #define CP_UTF16BE             1201
@@ -701,15 +701,31 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				}
 				
 				if (kd->wVKey == VK_LEFT || kd->wVKey == VK_RIGHT) {
+					HWND hGridWnd = GetDlgItem(hWnd, IDC_GRID);
+					HWND hHeader = ListView_GetHeader(hGridWnd);
+
 					int colCount = Header_GetItemCount(ListView_GetHeader(pHdr->hwndFrom));
-					int colNo = *(int*)GetProp(hWnd, TEXT("CURRENTCOLNO")) + (kd->wVKey == VK_RIGHT ? 1 : -1);
-					colNo = colNo < 0 ? colCount - 1 : colNo > colCount - 1 ? 0 : colNo;
+					int colNo = *(int*)GetProp(hWnd, TEXT("CURRENTCOLNO"));
+
+					int* colOrder = calloc(colCount, sizeof(int));
+					Header_GetOrderArray(hHeader, colCount, colOrder);
+	
+					int dir = kd->wVKey == VK_RIGHT ? 1 : -1;
+					int idx = 0;
+					for (idx; colOrder[idx] != colNo; idx++);
+					do {
+						idx = (colCount + idx + dir) % colCount;
+					} while (ListView_GetColumnWidth(hGridWnd, colOrder[idx]) == 0);
+
+					colNo = colOrder[idx];
+					free(colOrder);
+
 					SendMessage(hWnd, WMU_SET_CURRENT_CELL, *(int*)GetProp(hWnd, TEXT("CURRENTROWNO")), colNo);
 					return TRUE;
 				}
 			}
 
-			if ((pHdr->code == HDN_ITEMCHANGED || pHdr->code == HDN_ENDDRAG) && pHdr->hwndFrom == ListView_GetHeader(GetDlgItem(hWnd, IDC_GRID)))
+			if ((pHdr->code == HDN_ITEMCHANGED || pHdr->code == HDN_ENDDRAG) && pHdr->hwndFrom == ListView_GetHeader(GetDlgItem(hWnd, IDC_GRID))) 
 				PostMessage(hWnd, WMU_UPDATE_FILTER_SIZE, 0, 0);
 				
 			if (pHdr->idFrom == IDC_STATUSBAR && (pHdr->code == NM_CLICK || pHdr->code == NM_RCLICK)) {
@@ -1505,11 +1521,19 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				if (colNo < 0 || colNo > colCount - 1 || isCurrent && ListView_GetColumnWidth(hGridWnd, colNo) == 0)
 					return FALSE;
 
-				int hiddenColCount = 0;
-				for (int _colNo = 0; (_colNo < colCount) && (_colNo - hiddenColCount < colNo + 1) && !isCurrent; _colNo++) 
-					hiddenColCount += ListView_GetColumnWidth(hGridWnd, _colNo) == 0;
+				if (!isCurrent) {
+					int* colOrder = calloc(colCount, sizeof(int));
+					Header_GetOrderArray(hHeader, colCount, colOrder);
 
-				SendMessage(hWnd, WMU_SORT_COLUMN, colNo + hiddenColCount, 0);
+					int hiddenColCount = 0;
+					for (int idx = 0; (idx < colCount) && (idx - hiddenColCount <= colNo); idx++)
+						hiddenColCount += ListView_GetColumnWidth(hGridWnd, colOrder[idx]) == 0;
+
+					colNo = colOrder[colNo + hiddenColCount];
+					free(colOrder);
+				}
+				
+				SendMessage(hWnd, WMU_SORT_COLUMN, colNo, 0);
 				return TRUE;
 			}			
 			
