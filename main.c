@@ -71,7 +71,7 @@
 #define MAX_FILTER_LENGTH      2000
 #define DELIMITERS             TEXT(",;|\t:")
 #define APP_NAME               TEXT("csvtab")
-#define APP_VERSION            TEXT("1.0.5")
+#define APP_VERSION            TEXT("1.0.6")
 
 #define CP_UTF16LE             1200
 #define CP_UTF16BE             1201
@@ -920,8 +920,11 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 				return 0;
 			}
 			
-			if (!delimiter)
-				delimiter = detectDelimiter(data, skipComments);
+			if (!delimiter) {
+				TCHAR* str = getStoredString(TEXT("default-column-delimiter"), TEXT(""));
+				delimiter = _tcslen(str) ? str[0] : detectDelimiter(data, skipComments);
+				free(str);
+			}
 										
 			int colCount = 1;				
 			int rowNo = -1;
