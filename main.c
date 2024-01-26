@@ -71,7 +71,7 @@
 #define MAX_FILTER_LENGTH      2000
 #define DELIMITERS             TEXT(",;|\t:")
 #define APP_NAME               TEXT("csvtab")
-#define APP_VERSION            TEXT("1.0.6")
+#define APP_VERSION            TEXT("1.0.7")
 
 #define CP_UTF16LE             1200
 #define CP_UTF16BE             1201
@@ -1001,7 +1001,7 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 									vLen -= l + r;
 								}
 								
-								TCHAR* value = calloc(vLen + 1, sizeof(TCHAR));
+								TCHAR* value = calloc((vLen > 0 ? vLen : 0) + 1, sizeof(TCHAR));
 								if (vLen > 0) {
 									_tcsncpy(value, data + start + qPos + 1, vLen);
 									
@@ -1428,7 +1428,8 @@ LRESULT CALLBACK cbNewMain(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			*pFontSize += wParam;
 			DeleteFont(GetProp(hWnd, TEXT("FONT")));
 
-			HFONT hFont = CreateFont (*pFontSize, 0, 0, 0, FW_DONTCARE, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, (TCHAR*)GetProp(hWnd, TEXT("FONTFAMILY")));
+			int weight = getStoredValue(TEXT("font-weight"), 0);
+			HFONT hFont = CreateFont (*pFontSize, 0, 0, 0, weight < 0 || weight > 9 ? FW_DONTCARE : weight * 100, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_SWISS, (TCHAR*)GetProp(hWnd, TEXT("FONTFAMILY")));
 			HWND hGridWnd = GetDlgItem(hWnd, IDC_GRID);
 			SendMessage(hGridWnd, WM_SETFONT, (LPARAM)hFont, TRUE);
 
